@@ -1,0 +1,167 @@
+/***********************************************************
+*                                                          *
+* CDC readout board                                        *
+* Test program for data taking                             *
+*                                                          *
+* 2009/10/14 Tomohisa Uchida                               *
+* gcc -Wall -W -pedantic -mno-cygwin cdcBinDbg.c -lws2_32 *
+*                                                          *
+************************************************************/
+#undef Windows
+
+#ifdef Windows
+ #define __USE_W32_SOCKETS
+
+ #include <stdio.h>
+ #include <winsock.h>
+
+#else
+ #include <stdlib.h>
+ #include <stdio.h>
+ #include <string.h>
+
+ #include <arpa/inet.h>
+ #include <unistd.h>
+
+ #include <sys/types.h>
+ #include <sys/socket.h>
+ #include <netinet/in.h>
+
+#include <sys/time.h>
+
+#endif
+
+#define BUFSIZE 256000*2
+
+struct header{
+  unsigned char type;
+  unsigned char ver;
+  unsigned short id;
+  unsigned short time;
+  unsigned short length;
+  unsigned int trgCount;
+};
+
+int main(int argc, char* argv[]){
+
+  char *fileName;
+  unsigned char rcvdBuffer[BUFSIZE];
+  char* sitcpIpAddr;
+  int unitLen;
+  int numOfEvent;
+  FILE *fout;
+  struct sockaddr_in sitcpAddr;
+  int fBytes = 0;
+  int rBytes;
+  int recvState =0;
+
+  struct header *pcktHd;
+
+#ifdef Windows
+  u_short sitcpPort;
+  WSADATA wsaData;
+  SOCKET sock;
+ 
+#else
+  unsigned int sitcpPort;
+  int sock;
+
+#endif
+
+  /* Get IP address and port # of a SiTCP */
+  if(argc != 5){
+    printf("Usage: %s <IP address> <TCP Port #> <# of Event> <File name> \n\n", argv[0]);
+    exit(EXIT_FAILURE);
+  }else{
+    sitcpIpAddr = argv[1];
+    sitcpPort   = atoi(argv[2]);
+    numOfEvent  = atoi(argv[3]);
+    fileName    = argv[4];
+  }
+
+  char fullFileName[512];
+  sprintf(fullFileName, "%s", fileName);
+
+  if((fout=fopen(fullFileName,"wb"))==NULL){    
+      printf("Can't open %s\n", fullFileName);
+  #ifdef Windows
+      WSACleanup();
+  #endif
+      exit(1);
+  }
+
+
+  /* Create a Socket */
+  puts("\nCreate socket...\n");
+     
+#ifdef Windows
+  if(WSAStartup(MAKEWORD(1,1),&wsaData)){
+    puts("ERROR:WSAStartup()");
+    WSACleanup();
+    return -1;
+  }
+#endif
+
+  sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+
+  sitcpAddr.sin_family      = AF_INET;
+  sitcpAddr.sin_port        = htons(sitcpPort);
+  sitcpAddr.sin_addr.s_addr = inet_addr(sitcpIpAddr);
+
+  if(connect(sock, (struct sockaddr*) &sitcpAddr, sizeof(sitcpAddr))<0){
+    puts("Connect() faild");
+#ifdef Windows
+    closesocket(sock);
+    WSACleanup();
+#else
+    close(sock);
+#endif
+    fclose(fout);
+    exit(EXIT_FAILURE);
+  }
+
+  recvState=0x0F;
+  unitLen =12;
+
+	while(numOfEvent>0){
+            for(fBytes = 0; fBytes<unitLen;fBytes+=rBytes){
+                if((rBytes = read(sock, rcvdBuffer+fBytes, unitLen-fBytes)) <= 0){
+                    puts(" ");
+                    puts("recv() faild");
+#ifdef Windows
+                    closesocket(sock);
+                    WSACleanup();
+#else
+                    close(sock);
+#endif
+                    fclose(fout);
+                    exit(EXIT_FAILURE);
+                }
+            }
+// ******************** Header processing ********************
+
+                if(unitLen==12){
+                    fwrite(rcvdBuffer,sizeof(char),unitLen,fout);
+                    pcktHd = (struct header*)rcvdBuffer;
+                    unitLen = ntohs(pcktHd->length);
+
+// ******************** Data processing ********************
+                }else{
+                    fwrite(rcvdBuffer,sizeof(char),unitLen,fout);
+                    unitLen=12;
+                    numOfEvent--;
+                }
+        }
+
+  puts("\nFinished");
+#ifdef Windows
+  closesocket(sock);
+  WSACleanup();
+#else
+  close(sock);
+#endif
+  fclose(fout);
+  return 0;
+
+}
+
